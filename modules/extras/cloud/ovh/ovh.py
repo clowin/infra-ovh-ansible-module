@@ -170,6 +170,7 @@ RETURN = ''' # '''
 
 import ast
 import yaml
+import string
 
 try:
 	import json
@@ -271,18 +272,26 @@ def terminateServer(ovhclient, module):
 
 def changeReverse(ovhclient, module):
 	if module.params['domain'] and module.params['ip'] :
-		fqdn = module.params['name'] + '.' + module.params['domain'] + '.'
+                ip = string.replace(module.params['ip'], '/', '%2F')
+                if not module.params['ip_reverse']:
+                    ip_reverse = module.params['ip']
+                else:
+                    ip_reverse = module.params['ip_reverse']
+                if module.params['name']:
+		    fqdn = module.params['name'] + '.' + module.params['domain'] + '.'
+                else:
+		    fqdn = module.params['domain'] + '.'
 		result = {}
 		try:
-			result = ovhclient.get('/ip/%s/reverse/%s' % (module.params['ip'], module.params['ip']))
+			result = ovhclient.get('/ip/%s/reverse/%s' % (ip, ip_reverse))
 		except ovh.exceptions.ResourceNotFoundError:
 			result['reverse'] = ''
 		if result['reverse'] != fqdn:
 			if module.check_mode:
 				module.exit_json(changed=True, msg="Reverse %s to %s succesfully set ! - (dry run mode)" % (module.params['ip'], fqdn))
 			try:
-				ovhclient.post('/ip/%s/reverse' % module.params['ip'],
-						ipReverse=module.params['ip'],
+				ovhclient.post('/ip/%s/reverse' % ip,
+						ipReverse=ip_reverse,
 						reverse=fqdn)
 				module.exit_json(changed=True, msg="Reverse %s to %s succesfully set !" % (module.params['ip'], fqdn))
 			except APIError as apiError:
@@ -299,19 +308,26 @@ def changeDNS(ovhclient, module):
 	msg = ''
 	if module.params['name'] == 'refresh':
 		if module.check_mode:
-			module.exit_json(changed=True, msg="Domain %s succesfully refreshed ! - (dry run mode)" % module.params['domain'])
+			module.exit_json(changed=False, msg="Domain %s succesfully refreshed ! - (dry run mode)" % module.params['domain'])
 		try:
 			ovhclient.post('/domain/zone/%s/refresh' % module.params['domain'])
-			module.exit_json(changed=True, msg="Domain %s succesfully refreshed !" % module.params['domain'])
+			module.exit_json(changed=False, msg="Domain %s succesfully refreshed !" % module.params['domain'])
 		except APIError as apiError:
 			module.fail_json(changed=False, msg="Failed to call OVH API: {0}".format(apiError))
 	if module.params['domain'] and module.params['ip']:
 		if module.check_mode:
 			module.exit_json(changed=True, msg="DNS succesfully %s on %s - (dry run mode)" % (module.params['state'], module.params['name']))
 		try:
-			check = ovhclient.get('/domain/zone/%s/record' % module.params['domain'],
+			result = ovhclient.get('/domain/zone/%s/record' % module.params['domain'],
 						fieldType=u'A',
 						subDomain=module.params['name'])
+                        check = False
+                        for record_id in result:
+                            record = ovhclient.get('/domain/zone/%s/record/%s' % (module.params['domain'], record_id))
+                            check = record['target'] == module.params['ip']
+                            if check:
+                                break
+
 		except APIError as apiError:
 			module.fail_json(changed=False, msg="Failed to call OVH API: {0}".format(apiError))
 		if module.params['state'] == 'present':
@@ -494,13 +510,14 @@ def main():
 	module = AnsibleModule(
 			argument_spec = dict(
 				state = dict(default='present', choices=['present', 'absent', 'modified']),
-				name  = dict(required=True),
+				name  = dict(required=False),
 				service = dict(choices=['boot', 'dns', 'vrack', 'reverse', 'monitoring', 'install', 'status', 'list', 'template', 'terminate'], required=True),
 				domain = dict(required=False, default='None'),
 				ip    = dict(required=False, default='None'),
+				ip_reverse    = dict(required=False, default='None'),
 				vrack = dict(required=False, default='None'),
 				boot = dict(default='harddisk', choices=['harddisk', 'rescue']),
-				force_reboot = dict(required=False, default='no', choices=BOOLEANS),
+				force_reboot = dict(required=False, default='no', type='bool'),
 				template = dict(required=False, default='None'),
 				hostname = dict(required=False, default='None')
 				),
